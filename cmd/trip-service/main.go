@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"log"
-	"log/slog"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,120 +11,64 @@ import (
 	"time"
 
 	"github.com/freyliee/template/internal/config"
-	api "github.com/freyliee/template/internal/generated"
-	"github.com/freyliee/template/internal/handler"
-	"github.com/freyliee/template/internal/storage"
+	"github.com/freyliee/template/internal/container"
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	var level slog.Level
+	ctx := context.Background()
 
-	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
-		log.Fatal("invalid LOG_LEVEL")
-	}
-
-	slog.SetDefault(slog.New(slog.NewJSONHandler(
-		os.Stdout,
-		&slog.HandlerOptions{
-			Level: level,
-		},
-	)))
-
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
-
-	pool, err := storage.NewPostgresPool(ctx, cfg)
-	cancel()
-
+	app, err := container.New(ctx, cfg)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("initialize application: %w", err)
 	}
 
-	log.Println("Connected to PostgreSQL")
-
-	trips := storage.NewTripRepository(pool)
-
-	txManager := storage.NewTxManager(pool, cfg.DatabaseQueryTimeout)
-
-	h := handler.New(pool, cfg.DatabaseQueryTimeout, trips, txManager)
-	router := api.HandlerWithOptions(h, api.ChiServerOptions{
-		ErrorHandlerFunc: handler.HandleAPIError,
-	})
-
-	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           router,
-		ReadTimeout:       cfg.HTTPReadTimeout,
-		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
-		WriteTimeout:      cfg.HTTPWriteTimeout,
-		IdleTimeout:       cfg.HTTPIdleTimeout,
-	}
-
-	signalCtx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt,
-		syscall.SIGTERM,
-	)
+	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	serverErrors := make(chan error, 1)
+	failures := make(chan error, 1)
 
 	go func() {
-		log.Printf("HTTP server listening on %s", cfg.HTTPAddr)
-		serverErrors <- server.ListenAndServe()
+		app.Logger.InfoContext(ctx, "service started", "address", cfg.HTTPAddr)
+		failures <- app.Server.ListenAndServe()
 	}()
 
-	exitCode := 0
+	var result error
 
 	select {
 	case <-signalCtx.Done():
-		log.Println("Shutdown signal received")
-
 		stop()
-
-	case err := <-serverErrors:
-		if err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server failed: %v", err)
-			exitCode = 1
+	case err := <-failures:
+		if !errors.Is(err, http.ErrServerClosed) {
+			result = err
 		}
 	}
 
-	deadline := time.Now().Add(cfg.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(ctx, cfg.ShutdownTimeout)
+	defer cancel()
 
-	shutdownCtx, cancelShutdown := context.WithDeadline(
-		context.Background(),
-		deadline,
-	)
-	defer cancelShutdown()
+	watchdog := time.AfterFunc(cfg.ShutdownTimeout, func() { app.Logger.ErrorContext(ctx, "shutdown timeout exceeded"); os.Exit(1) })
+	defer watchdog.Stop()
 
-	shutdownDeadline := time.AfterFunc(
-		time.Until(deadline),
-		func() {
-			log.Println("Shutdown timeout exceeded, forcing exit")
-			os.Exit(1)
-		},
-	)
+	app.Logger.InfoContext(ctx, "service stopping")
 
-	log.Println("Stopping HTTP server")
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP shutdown failed: %v", err)
-		_ = server.Close()
-		exitCode = 1
+	if err := app.Server.Shutdown(shutdownCtx); err != nil {
+		result = errors.Join(result, err, app.Server.Close())
 	}
 
-	log.Println("Closing PostgreSQL pool")
-	pool.Close()
+	result = errors.Join(result, app.Close(shutdownCtx))
+	app.Logger.InfoContext(ctx, "service stopped")
 
-	shutdownDeadline.Stop()
-
-	log.Println("Service stopped")
-
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
+	return result
 }

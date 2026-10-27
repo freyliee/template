@@ -1,11 +1,10 @@
-package storage
+package transaction
 
 import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Executor interface {
@@ -13,10 +12,11 @@ type Executor interface {
 	QueryRow(ctx context.Context, sqlQuery string, args ...any) pgx.Row
 }
 
-func executorFromContext(ctx context.Context, pool *pgxpool.Pool) Executor {
+func ExecutorFromContext(ctx context.Context, pool Executor) Executor {
 	value, ok := ctx.Value(txKey{}).(pgx.Tx)
 	if ok {
 		return value
 	}
+
 	return pool
 }

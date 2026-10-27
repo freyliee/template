@@ -1,14 +1,12 @@
-package handler
+package create
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 
 	api "github.com/freyliee/template/internal/generated"
-	"github.com/google/uuid"
 )
 
 func decodeCreateTrip(
@@ -24,6 +22,7 @@ func decodeCreateTrip(
 	}
 
 	var extra json.RawMessage
+
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return data, fmt.Errorf(
 			"request body must contain exactly one JSON value",
@@ -40,40 +39,6 @@ func decodeCreateTrip(
 	if err := typedDecoder.Decode(&data); err != nil {
 		return data, fmt.Errorf(
 			"request body contains invalid values or unknown fields",
-		)
-	}
-
-	if data.UserId == uuid.Nil || data.DriverId == uuid.Nil {
-		return data, fmt.Errorf(
-			"user_id and driver_id must be non-zero UUIDs",
-		)
-	}
-
-	if data.Price < 0 {
-		return data, fmt.Errorf("price must be non-negative")
-	}
-
-	if !validCoordinate(data.StartPoint.Latitude, -90, 90) {
-		return data, fmt.Errorf(
-			"start_point.latitude must be between -90 and 90",
-		)
-	}
-
-	if !validCoordinate(data.StartPoint.Longitude, -180, 180) {
-		return data, fmt.Errorf(
-			"start_point.longitude must be between -180 and 180",
-		)
-	}
-
-	if !validCoordinate(data.EndPoint.Latitude, -90, 90) {
-		return data, fmt.Errorf(
-			"end_point.latitude must be between -90 and 90",
-		)
-	}
-
-	if !validCoordinate(data.EndPoint.Longitude, -180, 180) {
-		return data, fmt.Errorf(
-			"end_point.longitude must be between -180 and 180",
 		)
 	}
 
@@ -142,11 +107,4 @@ func requireField(
 	}
 
 	return nil
-}
-
-func validCoordinate(value, min, max float64) bool {
-	return !math.IsNaN(value) &&
-		!math.IsInf(value, 0) &&
-		value >= min &&
-		value <= max
 }

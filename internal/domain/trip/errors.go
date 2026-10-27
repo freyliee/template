@@ -1,4 +1,4 @@
-package model
+package trip
 
 import "errors"
 
@@ -7,3 +7,10 @@ var (
 	ErrTripCompleted = errors.New("trip already completed")
 	ErrDriverBusy    = errors.New("driver already has an active trip")
 )
+
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string { return e.Field + " " + e.Message }

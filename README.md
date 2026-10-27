@@ -1,101 +1,47 @@
-# Лабораторная работа 1
+# Лабораторная работа 2
 
 ## Запуск
-
-Поднять окружение:
 
 ```bash
 tripgoctl cluster start
 tripgoctl environment start
 tripgoctl connect
-```
-
-tripgoctl создаёт .env с адресами компонентов. Сохраните выданный
-DATABASE_URL и добавьте остальные параметры из .env.example.
-
-Применить миграции и запустить сервис:
-
-```bash
 make migrate
 make run
 ```
 
-Цели run и migrate автоматически экспортируют переменные из .env.
-
-## Конфигурация
-
-| Переменная | Назначение |
-|---|---|
-| HTTP_ADDR | Адрес HTTP-сервера |
-| LOG_LEVEL | Уровень логирования: debug, info, warn, error |
-| SHUTDOWN_TIMEOUT | Общий бюджет остановки |
-| HTTP_READ_TIMEOUT | Таймаут чтения запроса |
-| HTTP_READ_HEADER_TIMEOUT | Таймаут чтения заголовков |
-| HTTP_WRITE_TIMEOUT | Таймаут записи ответа |
-| HTTP_IDLE_TIMEOUT | Ожидание следующего keep-alive запроса |
-| DATABASE_URL | Строка подключения к PostgreSQL |
-| DATABASE_MAX_CONNS | Максимальный размер пула |
-| DATABASE_MIN_CONNS | Минимальный размер пула |
-| DATABASE_CONNECT_TIMEOUT | Таймаут подключения и начального Ping |
-| DATABASE_QUERY_TIMEOUT | Общий бюджет операций обработчика; также бюджет rollback |
-| DATABASE_MAX_CONN_LIFETIME | Максимальное время жизни соединения |
-
-Все параметры обязательны. Длительности задаются в формате Go:
-например 3s, 10s, 30m.
-
-## API
-
-- POST /api/v1/trips - создать поездку.
-- GET /api/v1/trips/{tripId} - получить поездку.
-- POST /api/v1/trips/{tripId}/finish - завершить поездку.
-- GET /health - проверка работы процесса без обращения к БД.
-- GET /ready - проверка доступности PostgreSQL.
-
-## Команды
+## Тесты и проверка кода
 
 ```bash
 make build
 make generate
-make migrate
-make run
+make lint
 make test
+make test-integration
 ```
 
-Откат одной последней миграции:
+## Архитектура
 
-```bash
-make migrate-down
+```
+cmd/trip-service: config, container
+container: HTTP-обработчики, usecase, repository, infra
+HTTP: интерфейсы usecase, domain/model, generated
+usecase: domain/model, интерфейсы repository/transaction/clock/observer
+repository: domain, pgx/squirrel, infra/postgres/transaction
+infra: PostgreSQL, время, slog и OpenTelemetry
 ```
 
-## Решения
+`main` читает конфигурацию, вызывает `container.New`, запускает HTTP-сервер
+и управляет остановкой. Конкретные зависимости собираются в `container`.
+Пул создаётся фабрикой `infra/postgres.NewPool`, вызываемой из контейнера.
 
-### Менеджер транзакций
+Каждому действию соответствуют пакеты `usecase/trip/create`, `get`, `finish`
+и одноимённые HTTP-пакеты. Неэкспортируемые интерфейсы находятся в `contract.go`
+у потребителя. Например, для получения поездки нужен только `GetTrip`,
+а не весь репозиторий.
 
-TxManager.Do открывает транзакцию и передаёт её через context
-в выполняемую функцию. Репозитории используют транзакцию из контекста,
-а при её отсутствии - пул соединений.
-
-При успешном выполнении происходит commit. При ошибке или панике
-выполняется попытка rollback. Паника продолжает распространяться наружу.
-Для rollback создаётся отдельный контекст с ограниченным временем,
-независимый от отмены запроса.
-
-Вложенный Do переиспользует существующую транзакцию. Commit и rollback
-выполняет только вызов, который её открыл.
-
-### Уровень изоляции
-
-Используется Read Committed. Уникальность активной поездки водителя
-обеспечивается ограничением БД. Завершение защищено блокировкой строки
-SELECT FOR UPDATE внутри транзакции.
-
-### Конкурентные операции
-
-Частичный уникальный индекс trips_one_active_per_driver_idx запрещает
-несколько активных поездок одного водителя.
-
-При завершении поездка читается через SELECT FOR UPDATE. Пока транзакция
-не завершится, другой finish ожидает освобождения строки. Затем он
-видит completed и возвращает 409 trip_completed.
-
-Создание и изменение статуса записывают историю в той же транзакции.
+`domain/trip` содержит поездку, входные данные, статусы, валидацию и `Finish`.
+Домен не импортирует HTTP, pgx, OpenAPI или OTel. `model.CreateTripInput` - имя
+входного DTO для usecase. Его структура совпадает с `trip.Data`, поэтому 
+использован алиас без второго одинакового набора полей. HTTP-конвертеры
+явно преобразуют generated-модели в доменные и обратно.

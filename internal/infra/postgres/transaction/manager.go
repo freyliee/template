@@ -1,4 +1,4 @@
-package storage
+package transaction
 
 import (
 	"context"
@@ -12,15 +12,17 @@ import (
 )
 
 type TxManager struct {
+	logger  *slog.Logger
 	pool    *pgxpool.Pool
 	timeout time.Duration
 }
 
 type txKey struct{}
 
-func NewTxManager(pool *pgxpool.Pool, timeout time.Duration) *TxManager {
+func NewTxManager(pool *pgxpool.Pool, timeout time.Duration, logger *slog.Logger) *TxManager {
 	return &TxManager{
 		pool:    pool,
+		logger:  logger,
 		timeout: timeout,
 	}
 }
@@ -47,7 +49,7 @@ func (m *TxManager) Do(ctx context.Context, fn func(ctx context.Context) error) 
 
 		if err := tx.Rollback(rollbackCtx); err != nil &&
 			!errors.Is(err, pgx.ErrTxClosed) {
-			slog.ErrorContext(
+			m.logger.ErrorContext(
 				rollbackCtx,
 				"rollback transaction failed",
 				"error", err,

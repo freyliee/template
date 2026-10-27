@@ -2,12 +2,22 @@ package config
 
 import (
 	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
 )
 
 type Config struct {
+	OTLPEndpoint         string
+	MetricExportInterval time.Duration
+	ExportTimeout        time.Duration
+	OTLPProtocol         string
+	TracesSampler        string
+	SamplerArg           float64
+	ServiceVersion       string
+
 	HTTPAddr        string
 	LogLevel        string
 	ShutdownTimeout time.Duration
@@ -90,6 +100,24 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 
+	for _, setting := range []struct {
+		name        string
+		destination *time.Duration
+	}{
+		{"HTTP_READ_TIMEOUT", &cfg.HTTPReadTimeout}, {"HTTP_READ_HEADER_TIMEOUT", &cfg.HTTPReadHeaderTimeout}, {"HTTP_WRITE_TIMEOUT", &cfg.HTTPWriteTimeout}, {"HTTP_IDLE_TIMEOUT", &cfg.HTTPIdleTimeout},
+	} {
+		value, err := readDuration(setting.name)
+		if err != nil {
+			return cfg, err
+		}
+
+		*setting.destination = value
+	}
+
+	if err := loadTelemetry(&cfg); err != nil {
+		return cfg, err
+	}
+
 	return cfg, nil
 }
 
@@ -112,4 +140,65 @@ func readDuration(name string) (time.Duration, error) {
 	}
 
 	return value, nil
+}
+
+func loadTelemetry(cfg *Config) error {
+	cfg.OTLPEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+
+	if cfg.OTLPEndpoint == "" {
+		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT is required")
+	}
+
+	endpoint, err := url.Parse(cfg.OTLPEndpoint)
+	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return fmt.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT must be an http(s) URL without credentials, query or fragment")
+	}
+
+	for _, setting := range []struct {
+		name        string
+		destination *time.Duration
+	}{
+		{"OTEL_METRIC_EXPORT_INTERVAL", &cfg.MetricExportInterval},
+		{"OTEL_EXPORTER_OTLP_TIMEOUT", &cfg.ExportTimeout},
+	} {
+		milliseconds, err := strconv.ParseInt(os.Getenv(setting.name), 10, 64)
+		if err != nil || milliseconds <= 0 || milliseconds > math.MaxInt64/int64(time.Millisecond) {
+			return fmt.Errorf("%s must be positive milliseconds", setting.name)
+		}
+
+		*setting.destination = time.Duration(milliseconds) * time.Millisecond
+	}
+
+	cfg.OTLPProtocol = os.Getenv("OTEL_EXPORTER_OTLP_PROTOCOL")
+
+	if cfg.OTLPProtocol != "grpc" && cfg.OTLPProtocol != "http/protobuf" {
+		return fmt.Errorf("OTEL_EXPORTER_OTLP_PROTOCOL must be grpc or http/protobuf")
+	}
+
+	cfg.TracesSampler = os.Getenv("OTEL_TRACES_SAMPLER")
+
+	switch cfg.TracesSampler {
+	case "always_on", "always_off", "traceidratio", "parentbased_always_on", "parentbased_always_off", "parentbased_traceidratio":
+	default:
+		return fmt.Errorf("invalid OTEL_TRACES_SAMPLER")
+	}
+
+	cfg.SamplerArg = 1
+
+	if value := os.Getenv("OTEL_TRACES_SAMPLER_ARG"); value != "" {
+		ratio, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(ratio) || ratio < 0 || ratio > 1 {
+			return fmt.Errorf("OTEL_TRACES_SAMPLER_ARG must be between 0 and 1")
+		}
+
+		cfg.SamplerArg = ratio
+	}
+
+	cfg.ServiceVersion = os.Getenv("SERVICE_VERSION")
+
+	if cfg.ServiceVersion == "" {
+		cfg.ServiceVersion = "dev"
+	}
+
+	return nil
 }
