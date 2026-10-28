@@ -1,44 +1,47 @@
-# TripGo — репозиторий для лабораторных работ
+# Лабораторная работа 2
 
-Заготовка курса «Разработка микросервисов на Go». Здесь вы делаете все пять
-работ: каждая следующая продолжает предыдущую, переписывать сервис с нуля не
-нужно.
-
-## Что делать сразу
-
-1. **Fork** этого репозитория к себе. Форк нужен, чтобы преподаватели видели
-   список всех работ курса одной страницей.
-2. Заведите модуль:
+## Запуск
 
 ```bash
-git clone git@github.com:<ваш-логин>/<ваш-репозиторий>.git
-cd <ваш-репозиторий>
-go mod init github.com/<ваш-логин>/<ваш-репозиторий>
+tripgoctl cluster start
+tripgoctl environment start
+tripgoctl connect
+make migrate
+make run
 ```
 
-Путь модуля потом не меняется — иначе придётся править все импорты. Проще всего
-взять адрес своего репозитория, каким бы он ни был.
+## Тесты и проверка кода
 
-Дальше — [`homework/docs/getting-started.md`](https://github.com/course-go-autumn-2026/course/blob/main/homework/docs/getting-started.md)
-в репозитории курса: инструменты, окружение, миграции, вид сданной работы.
+```bash
+make build
+make generate
+make lint
+make test
+make test-integration
+```
 
-## Где что лежит
+## Архитектура
 
-| Что | Где |
-|---|---|
-| Задания, документация, контракты | [`course-go-autumn-2026/course`](https://github.com/course-go-autumn-2026/course) |
-| Слайды и записи лекций | [`lections/`](https://github.com/course-go-autumn-2026/course/tree/main/lections) |
-| Как оценивают, дедлайны, порядок сдачи | [`homework/docs/grading.md`](https://github.com/course-go-autumn-2026/course/blob/main/homework/docs/grading.md) |
-| Локальное окружение и утилита `tripgoctl` | [`course-go-autumn-2026/course-infra`](https://github.com/course-go-autumn-2026/course-infra) |
+```
+cmd/trip-service: config, container
+container: HTTP-обработчики, usecase, repository, infra
+HTTP: интерфейсы usecase, domain/model, generated
+usecase: domain/model, интерфейсы repository/transaction/clock/observer
+repository: domain, pgx/squirrel, infra/postgres/transaction
+infra: PostgreSQL, время, slog и OpenTelemetry
+```
 
-Задания появляются по мере курса, каждое — после своей пары лекций.
+`main` читает конфигурацию, вызывает `container.New`, запускает HTTP-сервер
+и управляет остановкой. Конкретные зависимости собираются в `container`.
+Пул создаётся фабрикой `infra/postgres.NewPool`, вызываемой из контейнера.
 
-## Как сдавать
+Каждому действию соответствуют пакеты `usecase/trip/create`, `get`, `finish`
+и одноимённые HTTP-пакеты. Неэкспортируемые интерфейсы находятся в `contract.go`
+у потребителя. Например, для получения поездки нужен только `GetTrip`,
+а не весь репозиторий.
 
-Ветка `homework/NN` от `main`, pull request в `main` своего форка, ССЫЛКУ НИКУДА СКИДЫВАТЬ НЕ НУЖНО, ревьюер сам найдет ее внутри вашего форка. Подробно — в `grading.md` репозитория курса.
-
-## Чужие работы
-
-Форки видны всем, включая ваши. Смотреть чужие решения, пока идёт курс, —
-плохая идея: одинаковый код виден сразу, а разбираться на защите придётся
-самому.
+`domain/trip` содержит поездку, входные данные, статусы, валидацию и `Finish`.
+Домен не импортирует HTTP, pgx, OpenAPI или OTel. `model.CreateTripInput` - имя
+входного DTO для usecase. Его структура совпадает с `trip.Data`, поэтому 
+использован алиас без второго одинакового набора полей. HTTP-конвертеры
+явно преобразуют generated-модели в доменные и обратно.
