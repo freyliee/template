@@ -79,8 +79,6 @@ func (t *TripRepository) CreateTrip(ctx context.Context, trip api.Trip) error {
 	}
 
 	return nil
-
-	return nil
 }
 
 func (t *TripRepository) AddStatusHistory(ctx context.Context, tripId api.TripId, fromStatus *api.TripStatus, toStatus api.TripStatus, reason string) error {
@@ -159,7 +157,7 @@ func (t *TripRepository) getTrip(ctx context.Context, tripId api.TripId, forUpda
 		PlaceholderFormat(sq.Dollar)
 
 	if forUpdate {
-		builder.Suffix("FOR UPDATE")
+		builder = builder.Suffix("FOR UPDATE")
 	}
 
 	query, args, err := builder.ToSql()

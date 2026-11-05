@@ -51,6 +51,26 @@ func Load() (Config, error) {
 	}
 	cfg.ShutdownTimeout = timeout
 
+	cfg.HTTPReadTimeout, err = readDuration("HTTP_READ_TIMEOUT")
+	if err != nil {
+		return cfg, err
+	}
+
+	cfg.HTTPReadHeaderTimeout, err = readDuration("HTTP_READ_HEADER_TIMEOUT")
+	if err != nil {
+		return cfg, err
+	}
+
+	cfg.HTTPWriteTimeout, err = readDuration("HTTP_WRITE_TIMEOUT")
+	if err != nil {
+		return cfg, err
+	}
+
+	cfg.HTTPIdleTimeout, err = readDuration("HTTP_IDLE_TIMEOUT")
+	if err != nil {
+		return cfg, err
+	}
+
 	cfg.DatabaseURL = os.Getenv("DATABASE_URL")
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("DATABASE_URL is required")

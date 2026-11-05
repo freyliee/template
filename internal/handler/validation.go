@@ -86,16 +86,8 @@ func validateRequiredTripFields(body json.RawMessage) error {
 		return fmt.Errorf("request body must be an object")
 	}
 
-	for _, name := range []string{
-		"user_id",
-		"driver_id",
-		"start_point",
-		"end_point",
-		"price",
-	} {
-		if err := requireField(fields, name); err != nil {
-			return err
-		}
+	if err := validateFields(fields, "user_id", "driver_id", "start_point", "end_point", "price"); err != nil {
+		return err
 	}
 
 	for _, name := range []string{"start_point", "end_point"} {
@@ -104,10 +96,8 @@ func validateRequiredTripFields(body json.RawMessage) error {
 			return fmt.Errorf("%s must be an object", name)
 		}
 
-		for _, coordinate := range []string{"latitude", "longitude"} {
-			if err := requireField(point, coordinate); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
+		if err := validateFields(point, "latitude", "longitude"); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
 
@@ -128,6 +118,20 @@ func decodeObject(
 	}
 
 	return fields, nil
+}
+
+func validateFields(fields map[string]json.RawMessage, required ...string) error {
+	for _, name := range required {
+		if err := requireField(fields, name); err != nil {
+			return err
+		}
+	}
+
+	if len(fields) != len(required) {
+		return fmt.Errorf("object contains unknown fields")
+	}
+
+	return nil
 }
 
 func requireField(
